@@ -1,0 +1,6 @@
+@Gerdt_LR1_HostAddress = http://localhost:5207
+
+GET {{Gerdt_LR1_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

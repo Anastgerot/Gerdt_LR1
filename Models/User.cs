@@ -10,6 +10,9 @@ namespace Gerdt_LR1.Models
         public int Points { get; private set; }
         public bool IsAdmin => Login == "admin";
 
+        [System.Text.Json.Serialization.JsonIgnore]
+        public List<UserTerm> UserTerms { get; set; } = new();
+
         public void SetPassword(string raw)
         {
             using var sha = SHA256.Create();

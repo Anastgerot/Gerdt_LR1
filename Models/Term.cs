@@ -1,4 +1,4 @@
-﻿
+﻿using System.Text.Json.Serialization;
 namespace Gerdt_LR1.Models
 {
     public enum Direction { EnToRu, RuToEn }
@@ -8,8 +8,7 @@ namespace Gerdt_LR1.Models
         public string En { get; set; } = "";
         public string Ru { get; set; } = "";
         public string? Domain { get; set; }
-        public string? OwnerLogin { get; set; }
-        public User? Owner { get; set; }
+
 
         // Бизнес-логика: обновить перевод с учётом направления
         public void UpdateTranslation(Direction direction, string newValue)

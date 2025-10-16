@@ -5,6 +5,37 @@
     "version": "1.0"
   },
   "paths": {
+    "/api/Account/register": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/Account": {
       "post": {
         "tags": [
@@ -29,6 +60,18 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/Account/stats/me": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
         "responses": {
           "200": {
             "description": "OK"
@@ -114,6 +157,47 @@
         }
       }
     },
+    "/api/Assignments/user-assigments": {
+      "get": {
+        "tags": [
+          "Assignments"
+        ],
+        "parameters": [
+          {
+            "name": "solved",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": { }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/Assignments/{id}": {
       "delete": {
         "tags": [
@@ -137,30 +221,7 @@
         }
       }
     },
-    "/api/Assignments/{id}/question": {
-      "get": {
-        "tags": [
-          "Assignments"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK"
-          }
-        }
-      }
-    },
-    "/api/Assignments/{id}/answer": {
+    "/api/Assignments/{id}/question-answer": {
       "post": {
         "tags": [
           "Assignments"
@@ -182,6 +243,16 @@
               "schema": {
                 "$ref": "#/components/schemas/AnswerDto"
               }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerDto"
+              }
             }
           }
         },
@@ -192,7 +263,30 @@
         }
       }
     },
-    "/api/Assignments/create-assigment": {
+    "/api/Assignments/{id}/switch-direction": {
+      "post": {
+        "tags": [
+          "Assignments"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/Assignments/create-assignment": {
       "post": {
         "tags": [
           "Assignments"
@@ -218,44 +312,35 @@
         },
         "responses": {
           "200": {
-            "description": "OK",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "$ref": "#/components/schemas/Assignment"
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Assignment"
-                }
-              },
-              "text/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Assignment"
-                }
-              }
-            }
+            "description": "OK"
           }
         }
       }
     },
-    "/api/Assignments/{id}/switch-direction": {
+    "/api/Assignments/generate": {
       "post": {
         "tags": [
           "Assignments"
         ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateAssignmentsDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateAssignmentsDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateAssignmentsDto"
+              }
             }
           }
-        ],
+        },
         "responses": {
           "200": {
             "description": "OK"
@@ -554,16 +639,8 @@
             "type": "integer",
             "format": "int32"
           },
-          "assignedToLogin": {
-            "type": "string",
-            "nullable": true
-          },
           "direction": {
             "$ref": "#/components/schemas/Direction"
-          },
-          "isSolved": {
-            "type": "boolean",
-            "readOnly": true
           }
         },
         "additionalProperties": false
@@ -575,6 +652,19 @@
         ],
         "type": "string"
       },
+      "GenerateAssignmentsDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          }
+        },
+        "additionalProperties": false
+      },
       "LoginData": {
         "type": "object",
         "properties": {
@@ -585,6 +675,26 @@
           "password": {
             "type": "string",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RegisterDto": {
+        "required": [
+          "login",
+          "password"
+        ],
+        "type": "object",
+        "properties": {
+          "login": {
+            "maxLength": 64,
+            "minLength": 3,
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 128,
+            "minLength": 3,
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -605,11 +715,20 @@
             "nullable": true
           },
           "domain": {
-            "type": "string",
-            "nullable": true
+            "$ref": "#/components/schemas/TermDomain"
           }
         },
         "additionalProperties": false
+      },
+      "TermDomain": {
+        "enum": [
+          "General",
+          "Drilling",
+          "Geology",
+          "Equipment",
+          "Safety"
+        ],
+        "type": "string"
       },
       "TranslateDto": {
         "type": "object",

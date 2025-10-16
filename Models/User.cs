@@ -1,4 +1,5 @@
-﻿using System.Security.Cryptography;
+﻿using System.Text.Json.Serialization;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Gerdt_LR1.Models
@@ -10,8 +11,11 @@ namespace Gerdt_LR1.Models
         public int Points { get; private set; }
         public bool IsAdmin => Login == "admin";
 
-        [System.Text.Json.Serialization.JsonIgnore]
+        [JsonIgnore]
         public List<UserTerm> UserTerms { get; set; } = new();
+
+        [JsonIgnore] 
+        public List<UserAssignment> UserAssignments { get; set; } = new();
 
         public void SetPassword(string raw)
         {
@@ -32,16 +36,6 @@ namespace Gerdt_LR1.Models
             if (correctAnswers > 0) Points += correctAnswers * 10;
         }
 
-        // Бизнес-логика: создать карточку для конкретного термина и направления
-        public Assignment CreateAssignmentForTerm(Term term, Direction direction = Direction.EnToRu)
-        {
-            return new Assignment
-            {
-                TermId = term.Id,
-                Term = term,
-                AssignedToLogin = this.Login,
-                Direction = direction
-            };
-        }
+    
     }
 }

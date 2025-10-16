@@ -45,6 +45,43 @@ namespace Gerdt_LR1.Controllers
             return assignment;
         }
 
+        [HttpGet("user-assigments")]
+        [Authorize]
+        public async Task<ActionResult<IEnumerable<object>>> UserAssignments([FromQuery] bool? solved = null)
+        {
+            var login = User.Identity?.Name!;
+            if (string.IsNullOrWhiteSpace(login)) return Unauthorized();
+
+            var query = _context.UserAssignments
+                .Where(ua => ua.UserLogin == login)
+                .Include(ua => ua.Assignment)!.ThenInclude(a => a.Term)
+                .AsQueryable();
+
+            query = query.OrderBy(ua => ua.IsSolved);                        
+
+            var items = await query
+                .Select(ua => new
+                {
+                    assignmentId = ua.AssignmentId,
+                    termId = ua.Assignment!.TermId,
+                    direction = ua.Assignment.Direction.ToString(),
+                    isSolved = ua.IsSolved,
+                    solvedAt = ua.SolvedAt,
+
+                    question = ua.Assignment.Direction == Direction.EnToRu
+                               ? ua.Assignment.Term.En
+                               : ua.Assignment.Term.Ru,
+            
+                    expected = ua.IsSolved
+                               ? ua.Assignment.Term.Translate(ua.Assignment.Direction)
+                               : null
+                })
+                .ToListAsync();
+
+            return Ok(items);
+        }
+
+
         // DELETE
         [HttpDelete("{id}")]
         [Authorize(Roles = "admin")]
@@ -62,134 +99,238 @@ namespace Gerdt_LR1.Controllers
             return NoContent();
         }
 
-        [HttpGet("{id:int}/question")]
-        [Authorize]
-        public async Task<IActionResult> GetQuestion(int id)
-        {
-            var a = await _context.Assignments
-                .Include(x => x.Term)
-                .FirstOrDefaultAsync(x => x.Id == id);
-            if (a is null) return NotFound();
+        public record AnswerDto(string? Answer);
 
-            // только владелец или админ
-            var isOwner = string.Equals(User.Identity?.Name, a.AssignedToLogin, StringComparison.OrdinalIgnoreCase);
-            if (!isOwner && !User.IsInRole("admin")) return Forbid();
+        [HttpPost("{id:int}/question-answer")]
+        [Authorize]
+        public async Task<IActionResult> QuestionOrAnswer(int id, [FromBody] AnswerDto? dto)
+        {
+            var a = await _context.Assignments.Include(x => x.Term).FirstOrDefaultAsync(x => x.Id == id);
+            if (a is null) return NotFound(new { message = "assignment not found" });
+
+            var login = User.Identity?.Name;
+            if (string.IsNullOrWhiteSpace(login)) return Unauthorized();
+
+            var ua = await _context.UserAssignments
+                .FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == a.Id);
+
+            if (ua is null && !User.IsInRole("admin")) return Forbid();
 
             if (a.Term is null) return Problem("Term is missing for this assignment.", statusCode: 500);
 
             var question = a.Direction == Direction.EnToRu ? a.Term.En : a.Term.Ru;
-            var from = a.Direction == Direction.EnToRu ? "EN" : "RU";
-            var to = a.Direction == Direction.EnToRu ? "RU" : "EN";
+
+            if (dto is null || string.IsNullOrWhiteSpace(dto.Answer))
+            {
+                return Ok(new
+                {
+                    assignmentId = a.Id,
+                    termId = a.TermId,
+                    direction = a.Direction.ToString(),
+                    question,
+                    yourAnswer = (string?)null,
+                    expected = (string?)null,
+                    correct = (bool?)null,
+                    isSolved = ua?.IsSolved
+                });
+            }
+
+            if (ua is not null)
+            {
+                ua.Attempts += 1;
+                ua.LastAnsweredAt = DateTime.UtcNow;
+            }
+
+            var wasSolved = ua?.IsSolved ?? false;
+            var correct = a.CheckAnswer(dto.Answer);
+
+            if (correct && ua is not null && !wasSolved)
+            {
+                ua.IsSolved = true;
+                ua.SolvedAt = DateTime.UtcNow;
+                var user = await _context.Users.FindAsync(login);
+                user?.AddPoints(1);
+            }
+            await _context.SaveChangesAsync();
 
             return Ok(new
             {
                 assignmentId = a.Id,
                 termId = a.TermId,
                 direction = a.Direction.ToString(),
-                from,
-                to,
-                question
+                question,
+                yourAnswer = dto.Answer,
+                expected = a.Term.Translate(a.Direction),
+                correct,
+                isSolved = ua?.IsSolved
             });
         }
 
-        public record AnswerDto(string Answer);
-
-        [HttpPost("{id:int}/answer")]
+        [HttpPost("{id:int}/switch-direction")]
         [Authorize]
-        [Consumes("application/json")]
-        public async Task<IActionResult> Answer(int id, [FromBody] AnswerDto dto)
+        public async Task<IActionResult> SwitchDirection(int id)
         {
-            if (dto is null || string.IsNullOrWhiteSpace(dto.Answer))
-                return BadRequest(new { message = "answer is required" });
+            var a = await _context.Assignments.FirstOrDefaultAsync(x => x.Id == id);
+            if (a is null) return NotFound(new { message = "Assignment not found" });
 
-            var a = await _context.Assignments
-                .Include(x => x.Term)
-                .FirstOrDefaultAsync(x => x.Id == id);
+            var login = User.Identity?.Name;
+            if (string.IsNullOrWhiteSpace(login)) return Unauthorized();
 
-            if (a is null)
-                return NotFound(new { message = "assignment not found" });
 
-            // только владелец или админ
-            var isOwner = string.Equals(User.Identity?.Name, a.AssignedToLogin, StringComparison.OrdinalIgnoreCase);
-            if (!isOwner && !User.IsInRole("admin"))
-                return Forbid();
+            var newDir = a.Direction == Direction.EnToRu ? Direction.RuToEn : Direction.EnToRu;
 
-            if (a.Term is null)
-                return Problem("Term is missing for this assignment. Please fix data.", statusCode: 500);
+            var opposite = await _context.Assignments
+                .FirstOrDefaultAsync(x => x.TermId == a.TermId && x.Direction == newDir);
 
-            var wasSolved = a.IsSolved;
-            var correct = a.CheckAnswer(dto.Answer);
-
-            if (correct && !wasSolved)
+            if (opposite is null)
             {
-                var user = await _context.Users.FindAsync(a.AssignedToLogin);
-                user?.AddPoints(1);
+                opposite = new Assignment { TermId = a.TermId, Direction = newDir };
+                _context.Assignments.Add(opposite);
+                await _context.SaveChangesAsync(); 
+            }
+
+            // 4) Перелинковываем текущего пользователя:
+            // - если есть связь с текущей карточкой — перелинкуем её на противоположную
+            // - если уже есть связь с противоположной — просто сбросим прогресс
+            // - если вообще нет связей — ошибка
+            var uaCurrent = await _context.UserAssignments
+                .FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == a.Id);
+
+            var uaOpposite = await _context.UserAssignments
+                .FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == opposite.Id);
+
+            if (uaOpposite is not null)
+            {
+                uaOpposite.IsSolved = false;
+                uaOpposite.SolvedAt = null;
+            }
+            else if (uaCurrent is not null)
+            {
+                uaCurrent.AssignmentId = opposite.Id;
+                uaCurrent.IsSolved = false;
+                uaCurrent.SolvedAt = null;
+            }
+            else
+            {
+                return Conflict(new { message = "User doesn't have an assignment with the current id. Check your input." });
             }
 
             await _context.SaveChangesAsync();
 
-            var question = a.Direction == Direction.EnToRu ? a.Term.En : a.Term.Ru;
-
             return Ok(new
             {
-                assignmentId = a.Id,
-                termId = a.TermId,
-                direction = a.Direction.ToString(),
-                question,                     
-                yourAnswer = dto.Answer,
-                expected = a.ExpectedAnswer,
-                correct
+                assignmentId = opposite.Id,
+                termId = opposite.TermId,
+                newDirection = newDir.ToString(),
+                isSolved = false
             });
         }
 
-        public record AssignForMeDto(int TermId, Direction? Direction);    
 
-        [HttpPost("create-assigment")]
+        public record AssignForMeDto(int TermId, Direction? Direction);
+
+        [HttpPost("create-assignment")]
         [Authorize]
-        public async Task<ActionResult<Assignment>> CreateForMe([FromBody] AssignForMeDto dto)
+        public async Task<IActionResult> CreateAssignment([FromBody] AssignForMeDto dto)
         {
             var login = User.Identity?.Name;
             if (string.IsNullOrWhiteSpace(login)) return Unauthorized();
 
             var term = await _context.Terms.FindAsync(dto.TermId);
-            if (term is null) return NotFound(new { message = "term not found" });
+            if (term is null) return NotFound(new { message = "Term not found" });
 
             var dir = dto.Direction ?? Direction.EnToRu;
 
+            // 1) Создаем карточку по (TermId, Direction)
+            var assignment = await _context.Assignments
+                .FirstOrDefaultAsync(a => a.TermId == term.Id && a.Direction == dir);
 
-            var duplicate = await _context.Assignments
-                .AnyAsync(a => a.AssignedToLogin == login && a.TermId == dto.TermId && a.Direction == dir && !a.IsSolved);
-            if (duplicate) return Conflict(new { message = "assignment already exists" });
-
-            var a = new Assignment
+            if (assignment is null)
             {
-                TermId = term.Id,
-                AssignedToLogin = login,
-                Direction = dir
+                assignment = new Assignment { TermId = term.Id, Direction = dir };
+                _context.Assignments.Add(assignment);
+                await _context.SaveChangesAsync(); 
+            }
+
+            // 2) Проверяем, не привязана ли уже эта карточка к пользователю
+            var linkExists = await _context.UserAssignments
+                .AnyAsync(ua => ua.UserLogin == login && ua.AssignmentId == assignment.Id);
+
+            if (linkExists)
+                return Conflict(new { message = "Assignment already linked to this user" });
+
+            // 3) Создаем связь UserAssignment
+            var ua = new UserAssignment
+            {
+                UserLogin = login,
+                AssignmentId = assignment.Id,
+                IsSolved = false
             };
-
-            _context.Assignments.Add(a);
+            _context.UserAssignments.Add(ua);
             await _context.SaveChangesAsync();
 
-            return CreatedAtAction(nameof(GetAssignment), new { id = a.Id }, a);
+
+            var question = dir == Direction.EnToRu ? term.En : term.Ru;
+            return CreatedAtAction(nameof(GetAssignment), new { id = assignment.Id }, new
+            {
+                assignmentId = assignment.Id,
+                termId = term.Id,
+                direction = dir.ToString(),
+                question
+            });
         }
 
 
-        [HttpPost("{id:int}/switch-direction")]
-        [Authorize]
-        public async Task<ActionResult<object>> SwitchDirection(int id)
+        public record GenerateAssignmentsDto(int Count, Direction Direction);
+
+        [HttpPost("generate")]
+        [Authorize(Roles = "admin")]
+        public async Task<IActionResult> Generate([FromBody] GenerateAssignmentsDto dto)
         {
-            var a = await _context.Assignments.FirstOrDefaultAsync(x => x.Id == id);
-            if (a is null) return NotFound();
+            if (dto.Count <= 0)
+                return BadRequest(new { message = "Count must be > 0" });
 
-            var isOwner = string.Equals(User.Identity?.Name, a.AssignedToLogin, StringComparison.OrdinalIgnoreCase);
-            if (!isOwner && !User.IsInRole("admin")) return Forbid();
+            var dir = dto.Direction;
 
-            a.SwitchDirection();
+            // Найти термины, у которых НЕТ карточки с этим направлением
+            var candidates = await _context.Terms
+                .Where(t => !_context.Assignments
+                .Any(a => a.TermId == t.Id && a.Direction == dir))
+                .OrderBy(t => t.Id)
+                .Take(dto.Count)
+                .Select(t => t.Id)
+                .ToListAsync();
+
+            if (candidates.Count == 0)
+                return Conflict(new { message = "No terms without assignments for the specified direction." });
+
+            var toCreate = candidates.Select(id => new Assignment
+            {
+                TermId = id,
+                Direction = dir
+            }).ToList();
+
+            _context.Assignments.AddRange(toCreate);
+
             await _context.SaveChangesAsync();
 
-            return Ok(new { id = a.Id, newDirection = a.Direction, isSolved = a.IsSolved });
+            var result = toCreate.Select(a => new
+            {
+                assignmentId = a.Id,
+                termId = a.TermId,
+                direction = a.Direction.ToString()
+            });
+
+            return Ok(new
+            {
+                requested = dto.Count,
+                created = toCreate.Count,
+                direction = dir.ToString(),
+                items = result
+            });
         }
+
+
 
 
     }

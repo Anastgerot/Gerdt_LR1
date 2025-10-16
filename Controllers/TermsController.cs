@@ -118,65 +118,72 @@ namespace Gerdt_LR1.Controllers
             var text = (dto.Text ?? "").Trim();
             if (string.IsNullOrWhiteSpace(text)) return BadRequest("empty text");
 
-
+            // 1) ищем термин по любой стороне
             var textLower = text.ToLower();
             var term = await _context.Terms
                 .FirstOrDefaultAsync(t => t.En.ToLower() == textLower || t.Ru.ToLower() == textLower);
             if (term is null) return NotFound(new { message = "term not found" });
 
-
-            Direction direction = dto.Direction ?? (HasCyrillic(text) ? Direction.RuToEn : Direction.EnToRu);
+            // 2) определяем направление и перевод
+            var direction = dto.Direction ?? (HasCyrillic(text) ? Direction.RuToEn : Direction.EnToRu);
             var translation = direction == Direction.EnToRu ? term.Ru : term.En;
+            var question = direction == Direction.EnToRu ? term.En : term.Ru;
+            var from = direction == Direction.EnToRu ? "EN" : "RU";
+            var to = direction == Direction.EnToRu ? "RU" : "EN";
 
+            // 3) текущий пользователь
+            var login = User.Identity?.Name!;
 
-            var login = User.Identity?.Name;
+            // 3a) история просмотров (UserTerms)
+            var link = await _context.UserTerms
+                .FirstOrDefaultAsync(x => x.UserLogin == login && x.TermId == term.Id);
 
-            if (!string.IsNullOrWhiteSpace(login))
+            if (link is null)
             {
-                var link = await _context.UserTerms
-                    .FirstOrDefaultAsync(x => x.UserLogin == login && x.TermId == term.Id);
-
-                if (link is null)
+                _context.UserTerms.Add(new UserTerm
                 {
-                    _context.UserTerms.Add(new UserTerm
-                    {
-                        UserLogin = login,
-                        TermId = term.Id,
-                        LastViewedAt = DateTime.UtcNow
-                    });
-                }
-                else
-                {
-                    link.LastViewedAt = DateTime.UtcNow;
-                }
-
-
-                var exists = await _context.Assignments.AnyAsync(a =>
-                    a.AssignedToLogin == login &&
-                    a.TermId == term.Id &&
-                    a.Direction == direction &&
-                    !a.IsSolved);
-
-                if (!exists)
-                {
-                    _context.Assignments.Add(new Assignment
-                    {
-                        TermId = term.Id,
-                        AssignedToLogin = login,
-                        Direction = direction
-                    });
-                }
-
-                await _context.SaveChangesAsync();
+                    UserLogin = login,
+                    TermId = term.Id,           
+                    LastViewedAt = DateTime.UtcNow
+                });
+            }
+            else
+            {       
+                link.LastViewedAt = DateTime.UtcNow;
             }
 
+            // 3b) находим/создаём ОБЩУЮ карточку по (TermId, Direction)
+            var assignment = await _context.Assignments
+                .FirstOrDefaultAsync(a => a.TermId == term.Id && a.Direction == direction);
+
+            if (assignment is null)
+            {
+                assignment = new Assignment { TermId = term.Id, Direction = direction };
+                _context.Assignments.Add(assignment);
+                await _context.SaveChangesAsync(); 
+            }
+
+            // 3c) линкуем пользователя к карточке (если ещё нет)
+            var uaExists = await _context.UserAssignments
+                .AnyAsync(ua => ua.UserLogin == login && ua.AssignmentId == assignment.Id);
+
+            if (!uaExists)
+            {
+                _context.UserAssignments.Add(new UserAssignment
+                {
+                    UserLogin = login,
+                    AssignmentId = assignment.Id,
+                    IsSolved = false
+                });
+            }
+
+            await _context.SaveChangesAsync();
+
+            // 4) ответ
             return Ok(new
             {
-                termId = term.Id,
-                en = term.En,
-                ru = term.Ru,
-                direction,
-                translation
+                question,    
+                translation  
             });
         }
 

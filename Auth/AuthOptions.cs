@@ -38,5 +38,6 @@ namespace Gerdt_LR1.Auth
             var token = new JwtSecurityTokenHandler().WriteToken(jwt);
             return new { access_token = token, username = login ?? "guest", role = isAdmin ? "admin" : "user", expires = jwt.ValidTo };
         }
+
     }
 }

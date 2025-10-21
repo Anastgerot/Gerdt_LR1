@@ -16,7 +16,7 @@ namespace Gerdt_LR1.Data
 
         protected override void OnModelCreating(ModelBuilder b)
         {
-            // ----- User -----
+
             b.Entity<User>(e =>
             {
                 e.HasKey(x => x.Login);                       
@@ -26,7 +26,7 @@ namespace Gerdt_LR1.Data
 
             });
 
-            // ----- Term -----
+
             b.Entity<Term>(e =>
             {
                 e.HasKey(x => x.Id);                            
@@ -44,6 +44,7 @@ namespace Gerdt_LR1.Data
                 e.HasIndex(x => x.Ru);
             });
 
+
             b.Entity<Assignment>(e =>
             {
                 e.HasKey(x => x.Id);
@@ -57,7 +58,7 @@ namespace Gerdt_LR1.Data
                 e.HasIndex(x => new { x.TermId, x.Direction }).IsUnique();
             });
 
-            // UserAssignments (многие-ко-многим)
+
             b.Entity<UserAssignment>(e =>
             {
                 e.HasKey(x => x.Id);
@@ -77,7 +78,7 @@ namespace Gerdt_LR1.Data
                 e.HasIndex(x => new { x.UserLogin, x.AssignmentId }).IsUnique();
             });
 
-            // ----- UserTerm (многие-ко-многим) -----
+
             b.Entity<UserTerm>(e =>
             {
                 e.HasKey(x => x.Id);

@@ -32,141 +32,151 @@ public class AccountController : ControllerBase
 
     [HttpPost("register")]
     [AllowAnonymous]
-    public async Task<IActionResult> Register([FromBody] RegisterDto dto)
+    public async Task<IActionResult> Register([FromBody] RegisterDto? dto)
     {
-        if (!ModelState.IsValid) return BadRequest(ModelState);
-
-        var login = (dto.Login ?? "").Trim();
-        var password = dto.Password ?? "";
-
-        if (string.Equals(login, "admin", StringComparison.OrdinalIgnoreCase))
-            return Conflict(new { message = "This login is reserved." });
-
-        // проверяем, что логин свободен
-        var exists = await _db.Users.AnyAsync(u => u.Login == login);
-        if (exists) return Conflict(new { message = "Login already exists." });
-
-        var user = new User { Login = login };
-        user.SetPassword(password);      // хэшируем пароль
-        // Points = 0 по умолчанию (см. конфигурацию/модель)
-
-        _db.Users.Add(user);
-        await _db.SaveChangesAsync();
-
-        return Created($"/api/users/{login}", new
+        try
         {
-            login = user.Login,
-            points = user.Points
-        });
+            var login = (dto.Login ?? "").Trim();
+            var password = dto.Password ?? "";
 
+            if (string.IsNullOrWhiteSpace(login) || string.IsNullOrWhiteSpace(password))
+                return BadRequest(new { message = "Login and password are required." });
+
+            if (string.Equals(login, "admin", StringComparison.OrdinalIgnoreCase))
+                return Conflict(new { message = "This login is reserved." });
+
+            var exists = await _db.Users.AnyAsync(u => u.Login == login);
+            if (exists)
+                return Conflict(new { message = "Login already exists." });
+
+            var user = new User { Login = login };
+            user.SetPassword(password); 
+
+            _db.Users.Add(user);
+            await _db.SaveChangesAsync();
+
+            return Created($"/api/users/{login}", new
+            {
+                login = user.Login,
+                points = user.Points
+            });
+        }
+
+        catch (Exception ex)
+        {
+            return Problem(title: "Unexpected server error while registering.", detail: ex.Message, statusCode: 500);
+        }
     }
 
     [HttpPost]
     public async Task<IActionResult> GetToken([FromBody] LoginData ld)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Login == ld.login);
-        if (user is null || !user.CheckPassword(ld.password))
-            return Unauthorized(new { message = "wrong login/password" });
+        try
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Login == ld.login);
+            if (user is null || !user.CheckPassword(ld.password))
+                return Unauthorized(new { message = "Invalid login or password." });
 
-        return Ok(AuthOptions.GenerateToken(user.IsAdmin, user.Login));
+            return Ok(AuthOptions.GenerateToken(user.IsAdmin, user.Login));
+        }
+
+        catch (Exception ex)
+        {
+            return Problem(title: "Unexpected server error while issuing token.", detail: ex.Message, statusCode: 500);
+        }
+
     }
 
     [HttpGet("stats/me")]
     [Authorize]
     public async Task<IActionResult> MyStats()
     {
-        var login = User.Identity?.Name;
-        if (string.IsNullOrWhiteSpace(login)) return Unauthorized();
-
-        var user = await _db.Users.FirstAsync(u => u.Login == login);
-
-        // Базовый запрос БЕЗ Include
-        var qBase = _db.UserAssignments.Where(x => x.UserLogin == login);
-
-        // Агрегаты
-        var total = await qBase.CountAsync();
-        var solved = await qBase.CountAsync(x => x.IsSolved);
-        var unsolved = total - solved;
-
-        var attemptsTotal = await qBase.SumAsync(x => (int?)x.Attempts) ?? 0;
-
-        var avgAttemptsSolved = await qBase
-            .Where(x => x.IsSolved && x.Attempts > 0)
-            .Select(x => (double?)x.Attempts)
-            .AverageAsync() ?? 0;
-
-        var lastSolvedAt = await qBase.MaxAsync(x => (DateTime?)x.SolvedAt);
-        var lastAnsweredAt = await qBase.MaxAsync(x => (DateTime?)x.LastAnsweredAt);
-
-        // Разбивка по доменам (enum -> string)
-        var byDomain = await qBase
-            .GroupBy(x => x.Assignment!.Term!.Domain.ToString())
-            .Select(g => new
-            {
-                domain = g.Key,
-                solved = g.Count(x => x.IsSolved),
-                unsolved = g.Count(x => !x.IsSolved),
-
-                // среднее число попыток по группе; если попыток нет — 0
-                avgAttempts = g.Where(x => x.Attempts > 0)
-                               .Average(x => (double?)x.Attempts) ?? 0
-            })
-            .OrderByDescending(x => x.solved)
-            .ToListAsync();
-
-        // Топ сложных (больше попыток среди нерешённых)
-        var hardest = await qBase
-            .Where(x => !x.IsSolved && x.Attempts > 0)
-            .OrderByDescending(x => x.Attempts)
-            .Take(5)
-            .Select(x => new
-            {
-                assignmentId = x.AssignmentId,
-                termId = x.Assignment!.TermId,
-                question = x.Assignment.Direction == Direction.EnToRu
-                               ? x.Assignment.Term!.En
-                               : x.Assignment.Term!.Ru,
-                attempts = x.Attempts
-            })
-            .ToListAsync();
-
-        // Топ решённых с наибольшим числом попыток
-        var mostAttemptsSolved = await qBase
-            .Where(x => x.IsSolved)
-            .OrderByDescending(x => x.Attempts)
-            .Take(5)
-            .Select(x => new
-            {
-                assignmentId = x.AssignmentId,
-                termId = x.Assignment!.TermId,
-                question = x.Assignment.Direction == Direction.EnToRu
-                               ? x.Assignment.Term!.En
-                               : x.Assignment.Term!.Ru,
-                attempts = x.Attempts,
-                solvedAt = x.SolvedAt
-            })
-            .ToListAsync();
-
-        return Ok(new
+        try
         {
-            user = user.Login,
-            points = user.Points,
+            var login = User.Identity?.Name;
+            if (string.IsNullOrWhiteSpace(login))
+                return Unauthorized(new { message = "User is not authenticated." });
 
-            totals = new
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Login == login);
+            if (user is null)
+                return NotFound(new { message = "User not found." });
+
+            var qBase = _db.UserAssignments.Where(x => x.UserLogin == login);
+
+            var total = await qBase.CountAsync();
+            var solved = await qBase.CountAsync(x => x.IsSolved);
+            var unsolved = total - solved;
+            var attemptsTotal = await qBase.SumAsync(x => (int?)x.Attempts) ?? 0;
+            var lastSolvedAt = await qBase.MaxAsync(x => (DateTime?)x.SolvedAt);
+            var lastAnsweredAt = await qBase.MaxAsync(x => (DateTime?)x.LastAnsweredAt);
+
+
+            var byDomain = await qBase
+                .GroupBy(x => x.Assignment!.Term!.Domain.ToString())
+                .Select(g => new
+                {
+                    domain = g.Key,
+                    solved = g.Count(x => x.IsSolved),
+                    unsolved = g.Count(x => !x.IsSolved),
+                })
+                .OrderByDescending(x => x.solved)
+                .ToListAsync();
+
+
+            var hardestUnsolved = await qBase
+                .Where(x => !x.IsSolved && x.Attempts > 0)
+                .OrderByDescending(x => x.Attempts)
+                .Take(5)
+                .Select(x => new
+                {
+                    assignmentId = x.AssignmentId,
+                    termId = x.Assignment!.TermId,
+                    question = x.Assignment.Direction == Direction.EnToRu
+                               ? x.Assignment.Term!.En
+                               : x.Assignment.Term!.Ru,
+                    attempts = x.Attempts
+                })
+                .ToListAsync();
+
+
+            var mostAttemptsSolved = await qBase
+                .Where(x => x.IsSolved)
+                .OrderByDescending(x => x.Attempts)
+                .Take(5)
+                .Select(x => new
+                {
+                    assignmentId = x.AssignmentId,
+                    termId = x.Assignment!.TermId,
+                    question = x.Assignment.Direction == Direction.EnToRu
+                               ? x.Assignment.Term!.En
+                               : x.Assignment.Term!.Ru,
+                    attempts = x.Attempts,
+                    solvedAt = x.SolvedAt
+                })
+                .ToListAsync();
+
+            return Ok(new
             {
-                assignments = total,
-                solved,
-                unsolved,
-                attemptsTotal,
-                avgAttemptsSolved,
-                lastSolvedAt,
-                lastAnsweredAt
-            },
-
-            byDomain,
-            hardest,
-            mostAttemptsSolved
-        });
+                user = user.Login,
+                points = user.Points,
+                totals = new
+                {
+                    assignments = total,
+                    solved,
+                    unsolved,
+                    attemptsTotal,
+                    lastSolvedAt,
+                    lastAnsweredAt
+                },
+                byDomain,
+                hardestUnsolved,
+                mostAttemptsSolved
+            });
+        }
+        catch (Exception ex)
+        {
+            return Problem(title: "Unexpected server error while building stats.", detail: ex.Message, statusCode: 500);
+        }
     }
 
 }

@@ -9,7 +9,7 @@ namespace Gerdt_LR1.Auth
     {
         public const string ISSUER = "GerdtAuth";
         public const string AUDIENCE = "GerdtClient";
-        public const int LIFETIME = 10;
+        public const int LIFETIME = 30;
 
         private const string KEY = "super_secret_key_12345_super_secret_key_12345_super_secret_key_12345";
         public static SymmetricSecurityKey GetSymmetricSecurityKey()

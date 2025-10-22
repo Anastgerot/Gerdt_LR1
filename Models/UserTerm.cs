@@ -7,8 +7,11 @@ namespace Gerdt_LR1.Models
         public string UserLogin { get; set; } = ""; 
         public int TermId { get; set; }           
 
-        [JsonIgnore] public User? User { get; set; }
-        [JsonIgnore] public Term? Term { get; set; }
+        [JsonIgnore] 
+        public User? User { get; set; }
+
+        [JsonIgnore] 
+        public Term? Term { get; set; }
             
         public DateTime LastViewedAt { get; set; } = DateTime.UtcNow;
     }

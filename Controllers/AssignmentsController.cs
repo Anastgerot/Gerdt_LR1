@@ -259,7 +259,7 @@ namespace Gerdt_LR1.Controllers
                 {
                     opposite = new Assignment { TermId = a.TermId, Direction = newDir };
                     _context.Assignments.Add(opposite);
-                    await _context.SaveChangesAsync(); // чтобы получить Id
+                    await _context.SaveChangesAsync(); 
                 }
 
                 // 2) Перелинковать пользователя
@@ -385,7 +385,7 @@ namespace Gerdt_LR1.Controllers
 
                 var dir = dto.Direction; 
 
-                // Ищем термины, по которым НЕТ карточки с указанным направлением
+                // Ищем термины, по которым нет карточки с указанным направлением
                 var candidateIds = await _context.Terms
                     .Where(t => !_context.Assignments.Any(a => a.TermId == t.Id && a.Direction == dir))
                     .OrderBy(t => t.Id)
@@ -428,5 +428,134 @@ namespace Gerdt_LR1.Controllers
                                detail: ex.Message, statusCode: 500);
             }
         }
+
+
+        public record AddAssigmentsDto(int count, string UserLogin);
+
+        [HttpPost("add-assigments-to-user")]
+        [Authorize(Roles = "admin")]
+        public async Task<IActionResult> AddAssigmentsToUser([FromBody] AddAssigmentsDto? dto)
+        {
+            try
+            {
+                if (dto.count <= 0)
+                    return BadRequest(new { message = "Count must be greater than 0." });
+
+                if (string.IsNullOrWhiteSpace(dto.UserLogin))
+                    return BadRequest(new { message = "UserLogin is required." });
+
+                var login = dto.UserLogin.Trim();
+
+                // Пользователь существует?
+                var userExists = await _context.Users.AsNoTracking().AnyAsync(u => u.Login == login);
+                if (!userExists)
+                    return NotFound(new { message = $"User '{login}' not found." });
+
+                // Выбираем Assignment, которых у пользователя ещё нет
+                var candidateAssignments = await _context.Assignments.AsNoTracking()
+                    .Where(a => !_context.UserAssignments
+                        .Any(ua => ua.UserLogin == login && ua.AssignmentId == a.Id))
+                    .OrderBy(a => a.Id)
+                    .Take(dto.count)
+                    .Select(a => new { a.Id, a.TermId, a.Direction })
+                    .ToListAsync();
+
+                if (candidateAssignments.Count == 0)
+                    return Conflict(new { message = "No new assignments to link for this user." });
+
+                var links = candidateAssignments.Select(a => new UserAssignment
+                {
+                    UserLogin = login,
+                    AssignmentId = a.Id,
+                    IsSolved = false
+                }).ToList();
+
+                _context.UserAssignments.AddRange(links);
+                await _context.SaveChangesAsync();
+
+                var items = candidateAssignments.Select(a => new
+                {
+                    assignmentId = a.Id,
+                    termId = a.TermId,
+                    direction = a.Direction.ToString()
+                });
+
+                return Ok(new
+                {
+                    user = login,
+                    requestedLinks = dto.count,
+                    createdLinks = links.Count,
+                    items
+                });
+            }
+            catch (Exception ex)
+            {
+                return Problem(title: "Unexpected server error while adding assignments to user.",
+                               detail: ex.Message, statusCode: 500);
+            }
+        }
+
+
+        public record ResetAssignmentDto(bool ResetAttempts = true, bool ClearTimestamps = true);
+
+        [HttpPost("{id:int}/mark-unsolved")]
+        [Authorize]
+        public async Task<IActionResult> MarkUnsolved(int id, [FromBody] ResetAssignmentDto? dto)
+        {
+            try
+            {
+                if (id <= 0)
+                    return BadRequest(new { message = "The identifier in the URL must be a positive number." });
+
+                // 1) Карточка существует?
+                var a = await _context.Assignments.FirstOrDefaultAsync(x => x.Id == id);
+                if (a is null)
+                    return NotFound(new { message = $"Assignment with id={id} not found." });
+
+                // 2) Текущий пользователь
+                var login = User.Identity?.Name;
+                if (string.IsNullOrWhiteSpace(login))
+                    return Unauthorized(new { message = "User is not authenticated." });
+
+                // 3) Связь пользователь-карточка
+                var ua = await _context.UserAssignments
+                    .FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == a.Id);
+
+                if (ua is null)
+                    return Forbid();
+
+                // 4) Сброс статуса
+                ua.IsSolved = false;
+                ua.SolvedAt = null;
+
+                // Параметры сброса 
+                var reset = dto ?? new ResetAssignmentDto();
+                if (reset.ResetAttempts)
+                    ua.Attempts = 0;
+
+                if (reset.ClearTimestamps)
+                    ua.LastAnsweredAt = null;
+
+                await _context.SaveChangesAsync();
+
+                // 5) Вернём краткую информацию
+                return Ok(new
+                {
+                    assignmentId = ua.AssignmentId,
+                    user = ua.UserLogin,
+                    isSolved = ua.IsSolved,
+                    attempts = ua.Attempts,
+                    solvedAt = ua.SolvedAt,
+                    lastAnsweredAt = ua.LastAnsweredAt
+                });
+            }
+            catch (Exception ex)
+            {
+                return Problem(
+                    title: $"Unexpected server error while marking assignment id={id} as unsolved.",
+                     detail: ex.Message, statusCode: 500);
+            }
+        }
+
     }
 }

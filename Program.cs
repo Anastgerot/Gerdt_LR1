@@ -3,12 +3,15 @@ using System.Text.Json.Serialization;
 using Gerdt_LR1.Auth;
 using Gerdt_LR1.Data;
 using Gerdt_LR1.Models;
+using Gerdt_LR1.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
+
+
 
 
 // DbContext
@@ -23,6 +26,11 @@ builder.Services.AddOpenApi();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddScoped<IAssignmentsService, AssignmentsService>();
+builder.Services.AddScoped<ITermsService, TermsService>();
+builder.Services.AddScoped<IAccountService, AccountService>();
+
 
 builder.Services.AddAuthorization();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

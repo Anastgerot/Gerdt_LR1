@@ -86,33 +86,7 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Assignment"
-                  }
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Assignment"
-                  }
-                }
-              },
-              "text/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Assignment"
-                  }
-                }
-              }
-            }
+            "description": "OK"
           }
         }
       }
@@ -135,24 +109,7 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "$ref": "#/components/schemas/Assignment"
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Assignment"
-                }
-              },
-              "text/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Assignment"
-                }
-              }
-            }
+            "description": "OK"
           }
         }
       }
@@ -337,17 +294,17 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AddAssigmentsDto"
+                "$ref": "#/components/schemas/AddAssignmentsDto"
               }
             },
             "text/json": {
               "schema": {
-                "$ref": "#/components/schemas/AddAssigmentsDto"
+                "$ref": "#/components/schemas/AddAssignmentsDto"
               }
             },
             "application/*+json": {
               "schema": {
-                "$ref": "#/components/schemas/AddAssigmentsDto"
+                "$ref": "#/components/schemas/AddAssignmentsDto"
               }
             }
           }
@@ -578,7 +535,7 @@
   },
   "components": {
     "schemas": {
-      "AddAssigmentsDto": {
+      "AddAssignmentsDto": {
         "type": "object",
         "properties": {
           "count": {
@@ -605,23 +562,6 @@
       "AssignForMeDto": {
         "type": "object",
         "properties": {
-          "termId": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "direction": {
-            "$ref": "#/components/schemas/Direction"
-          }
-        },
-        "additionalProperties": false
-      },
-      "Assignment": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int32"
-          },
           "termId": {
             "type": "integer",
             "format": "int32"
@@ -667,21 +607,15 @@
         "additionalProperties": false
       },
       "RegisterDto": {
-        "required": [
-          "login",
-          "password"
-        ],
         "type": "object",
         "properties": {
           "login": {
-            "maxLength": 64,
-            "minLength": 3,
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "password": {
-            "maxLength": 128,
-            "minLength": 3,
-            "type": "string"
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false

@@ -11,3 +11,5 @@ public interface IAccountService
     Task<object?> GetTokenAsync(LoginData ld, CancellationToken ct);
     Task<object?> MyStatsAsync(string login, CancellationToken ct);
 }
+
+

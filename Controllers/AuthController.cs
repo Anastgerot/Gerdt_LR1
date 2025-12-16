@@ -39,7 +39,7 @@ public class AccountController : ControllerBase
         {
             var token = await _svc.GetTokenAsync(ld, ct);
             if (token is null) 
-                return Unauthorized(new { message = "Invalid login or password." });
+                return Unauthorized(new { message = "Неправильный логин или пароль." });
 
             return Ok(token);
         }

@@ -161,27 +161,36 @@ public class AssignmentsController : ControllerBase
     {
         try
         {
-            if (dto is null || dto.TermId <= 0) 
-                return BadRequest(new { message = "TermId must be a positive number." });
+            if (dto is null || (dto.SelectedTermId <= 0 && string.IsNullOrWhiteSpace(dto.SearchTerm)))
+                return BadRequest(new
+                {
+                    message = "Either 'selectedTermId' (positive number) or 'searchTerm' (non-empty string) must be provided."
+                });
 
             var login = User.Identity?.Name;
-
             if (string.IsNullOrWhiteSpace(login))
                 return Unauthorized(new { message = "User is not authenticated." });
 
             var (result, status) = await _svc.CreateForUserAsync(login, dto, ct);
+
             return status switch
             {
                 201 => CreatedAtAction(nameof(GetAssignment), new { id = ((dynamic)result).assignmentId }, result),
+                200 => Ok(result),
+                400 => BadRequest(new { message = ((dynamic)result).msg }),
                 404 => NotFound(new { message = ((dynamic)result).msg }),
                 409 => Conflict(new { message = ((dynamic)result).msg }),
-                _ => Ok(result)
+                _ => StatusCode(status, result)
             };
         }
-        catch (Exception ex) { 
-            return Problem(title: "Unexpected server error while creating assignment.", 
-                detail: ex.Message, 
-                statusCode: 500); }
+        catch (Exception ex)
+        {
+            return Problem(
+                title: "Unexpected server error while creating assignment.",
+                detail: ex.Message,
+                statusCode: 500
+            );
+        }
     }
 
     [HttpPost("generate")]
@@ -265,5 +274,46 @@ public class AssignmentsController : ControllerBase
                 statusCode: 500);
         }
     }
+
+    [HttpGet("solved")]
+    [Authorize]
+    public async Task<IActionResult> GetSolved(CancellationToken ct)
+    {
+        try
+        {
+            var login = User.Identity?.Name;
+            if (string.IsNullOrWhiteSpace(login))
+                return Unauthorized(new { message = "User is not authenticated." });
+
+            var list = await _svc.GetSolvedAsync(login, ct);
+            return Ok(list);
+        }
+        catch (Exception ex)
+        {
+            return Problem(
+                title: "Unexpected server error while getting solved assignments.",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    }
+
+    [HttpPost("{id:int}/peek-answer")]
+    [Authorize]
+    public async Task<IActionResult> PeekAnswer(int id, CancellationToken ct)
+    {
+        var login = User.Identity?.Name;
+        if (string.IsNullOrWhiteSpace(login))
+            return Unauthorized();
+
+        var ok = await _svc.PeekAnswerAsync(id, login, ct);
+
+        if (!ok)
+            return NotFound();
+
+        return Ok(new { viewed = true });
+    }
+
+
+
 
 }

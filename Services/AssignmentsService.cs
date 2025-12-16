@@ -10,8 +10,22 @@ public class AssignmentsService : IAssignmentsService
     private readonly AppDbContext _db;
     public AssignmentsService(AppDbContext db) => _db = db;
 
-    public async Task<IReadOnlyList<Assignment>> GetAllAsync(CancellationToken ct)
-        => await _db.Assignments.AsNoTracking().OrderBy(a => a.Id).ToListAsync(ct);
+    public async Task<IReadOnlyList<object>> GetAllAsync(CancellationToken ct)
+    {
+        return await _db.Assignments
+            .AsNoTracking()
+            .Include(a => a.Term)
+            .OrderBy(a => a.Id)
+            .Select(a => new
+            {
+                id = a.Id,
+                termId = a.TermId,
+                direction = a.Direction.ToString(),
+                termEn = a.Term != null ? a.Term.En : null,
+                termRu = a.Term != null ? a.Term.Ru : null,
+            })
+            .ToListAsync<object>(ct);
+    }
 
     public async Task<Assignment?> GetByIdAsync(int id, CancellationToken ct)
         => await _db.Assignments.FindAsync([id], ct);
@@ -51,7 +65,12 @@ public class AssignmentsService : IAssignmentsService
         if (a is null) return null;
 
         var ua = await _db.UserAssignments.FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == a.Id, ct);
-        if (ua is null) return new { forbid = true }; // сигнал контроллеру вернуть 403
+        if (ua is null) return new { forbid = true };
+
+        // Получаем все термины с тем же английским словом
+        var allTermsWithSameEn = await _db.Terms
+            .Where(t => t.En.ToLower() == a.Term!.En.ToLower())
+            .ToListAsync(ct);
 
         var question = a.Direction == Direction.EnToRu ? a.Term!.En : a.Term!.Ru;
 
@@ -66,7 +85,10 @@ public class AssignmentsService : IAssignmentsService
                 yourAnswer = (string?)null,
                 expected = (string?)null,
                 correct = (bool?)null,
-                isSolved = ua.IsSolved
+                isSolved = ua.IsSolved,
+                allPossibleTranslations = a.Direction == Direction.EnToRu
+                    ? allTermsWithSameEn.Select(t => t.Ru).Distinct().ToList()
+                    : null
             };
         }
 
@@ -74,15 +96,78 @@ public class AssignmentsService : IAssignmentsService
         ua.LastAnsweredAt = DateTime.UtcNow;
 
         var wasSolved = ua.IsSolved;
-        var correct = a.CheckAnswer(dto.Answer);
 
-        if (correct && !wasSolved)
+        // Проверяем ответ по всем возможным переводам
+        bool correct = false;
+        Term? matchedTerm = null;
+
+        if (a.Direction == Direction.EnToRu)
         {
-            ua.IsSolved = true;
-            ua.SolvedAt = DateTime.UtcNow;
+            // Для направления EN->RU проверяем все возможные русские переводы
+            var normalizedAnswer = dto.Answer.Trim().ToLower();
 
-            var user = await _db.Users.FindAsync([login], ct);
-            user?.AddPoints(1);
+            foreach (var term in allTermsWithSameEn)
+            {
+                var normalizedRu = term.Ru.Trim().ToLower();
+                if (normalizedRu == normalizedAnswer ||
+                    normalizedRu.Split(',').Select(x => x.Trim()).Contains(normalizedAnswer))
+                {
+                    correct = true;
+                    matchedTerm = term;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            correct = a.CheckAnswer(dto.Answer);
+            matchedTerm = a.Term;
+        }
+
+        if (correct)
+        {
+            if (matchedTerm != null && matchedTerm.Id != a.TermId)
+            {
+                ua.IsSolved = false; 
+
+                var correctAssignment = await _db.Assignments
+                    .FirstOrDefaultAsync(x => x.TermId == matchedTerm.Id && x.Direction == a.Direction, ct);
+
+                if (correctAssignment != null)
+                {
+                    var correctUa = await _db.UserAssignments
+                        .FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == correctAssignment.Id, ct);
+
+                    if (correctUa != null && !correctUa.IsSolved)
+                    {
+                        correctUa.IsSolved = true;
+                        correctUa.SolvedAt = DateTime.UtcNow;
+                        correctUa.Attempts += 1;
+                        correctUa.LastAnsweredAt = DateTime.UtcNow;
+
+                        if (!correctUa.ViewedAnswer)
+                        {
+                            var user = await _db.Users.FindAsync([login], ct);
+                            user?.AddPoints(1);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Ответ для текущей карточки
+                if (!wasSolved)
+                {
+                    ua.IsSolved = true;
+                    ua.SolvedAt = DateTime.UtcNow;
+
+                    if (!ua.ViewedAnswer)
+                    {
+                        var user = await _db.Users.FindAsync([login], ct);
+                        user?.AddPoints(1);
+                    }
+                }
+            }
         }
 
         await _db.SaveChangesAsync(ct);
@@ -94,9 +179,16 @@ public class AssignmentsService : IAssignmentsService
             direction = a.Direction.ToString(),
             question,
             yourAnswer = dto.Answer,
+            // Показываем ожидаемый перевод для текущей карточки
             expected = a.Term!.Translate(a.Direction),
+            // А также все возможные переводы
+            allTranslations = a.Direction == Direction.EnToRu
+                ? allTermsWithSameEn.Select(t => t.Ru).Distinct().ToList()
+                : new List<string> { a.Term.En },
             correct,
-            isSolved = ua.IsSolved
+            isSolved = ua.IsSolved,
+            // Флаг, показывающий, что ответ был зачтен за другую карточку
+            creditedToOtherCard = correct && matchedTerm != null && matchedTerm.Id != a.TermId
         };
     }
     public async Task<bool> IsLinkedAsync(int assignmentId, string login, CancellationToken ct)
@@ -157,27 +249,104 @@ public class AssignmentsService : IAssignmentsService
 
     public async Task<(object result, int createdStatus)> CreateForUserAsync(string login, AssignForMeDto dto, CancellationToken ct)
     {
-        var term = await _db.Terms.FindAsync([dto.TermId], ct);
-        if (term is null) return (new { notFound = true, msg = $"Term with id={dto.TermId} not found." }, 404);
+        if (dto.SelectedTermId.HasValue)
+        {
+            return await CreateByTermIdAsync(login, dto, ct);
+        }
 
+        if (string.IsNullOrWhiteSpace(dto.SearchTerm))
+            return (new { error = true, msg = "Search term must be provided." }, 400);
+
+        var searchTerm = dto.SearchTerm.Trim().ToLower();
         var dir = dto.Direction ?? Direction.EnToRu;
 
+        List<Term> foundTerms;
+
+        if (dir == Direction.EnToRu)
+        {
+            // Ищем по английскому термину
+            foundTerms = await _db.Terms
+                .Where(t => t.En.ToLower().Contains(searchTerm))
+                .ToListAsync(ct);
+        }
+        else 
+        {
+            // Ищем по русскому термину
+            foundTerms = await _db.Terms
+                .Where(t => t.Ru.ToLower().Contains(searchTerm))
+                .ToListAsync(ct);
+        }
+
+        if (!foundTerms.Any())
+        {
+            return (new
+            {
+                notFound = true,
+                msg = $"No terms found for '{dto.SearchTerm}' in direction {dir}.",
+                searchTerm = dto.SearchTerm,
+                direction = dir.ToString()
+            }, 404);
+        }
+
+        // Если нашли только один вариант, создаем карточку
+        if (foundTerms.Count == 1)
+        {
+            return await CreateAssignmentForTerm(login, foundTerms[0].Id, dir, ct);
+        }
+
+        // Если нашли несколько вариантов, возвращаем список для выбора
+        return (new
+        {
+            multipleChoices = true,
+            msg = $"Found {foundTerms.Count} terms matching '{dto.SearchTerm}'",
+            terms = foundTerms.Select(t => new
+            {
+                termId = t.Id,
+                en = t.En,
+                ru = t.Ru
+            }),
+            searchTerm = dto.SearchTerm,
+            direction = dir.ToString()
+        }, 200); 
+    }
+
+    // Вспомогательный метод для создания карточки по ID термина
+    private async Task<(object result, int createdStatus)> CreateByTermIdAsync(string login, AssignForMeDto dto, CancellationToken ct)
+    {
+        var term = await _db.Terms.FindAsync([dto.SelectedTermId!.Value], ct);
+        if (term is null)
+            return (new { notFound = true, msg = $"Term with id={dto.SelectedTermId} not found." }, 404);
+
+        var dir = dto.Direction ?? Direction.EnToRu;
+        return await CreateAssignmentForTerm(login, term.Id, dir, ct);
+    }
+
+    // Вспомогательный метод для создания Assignment для термина
+    private async Task<(object result, int createdStatus)> CreateAssignmentForTerm(string login, int termId, Direction direction, CancellationToken ct)
+    {
+        // Сначала проверяем, нет ли у пользователя уже этой карточки
+        var existingUserAssignment = await _db.UserAssignments
+            .Include(ua => ua.Assignment)
+            .FirstOrDefaultAsync(ua =>
+                ua.UserLogin == login &&
+                ua.Assignment.TermId == termId &&
+                ua.Assignment.Direction == direction, ct);
+
+        if (existingUserAssignment != null)
+            return (new { conflict = true, msg = "This assignment is already linked to the current user." }, 409);
+
+        // Ищем Assignment
         var assignment = await _db.Assignments
-            .FirstOrDefaultAsync(a => a.TermId == term.Id && a.Direction == dir, ct);
+            .FirstOrDefaultAsync(a => a.TermId == termId && a.Direction == direction, ct);
 
         if (assignment is null)
         {
-            assignment = new Assignment { TermId = term.Id, Direction = dir };
+            assignment = new Assignment { TermId = termId, Direction = direction };
             _db.Assignments.Add(assignment);
             await _db.SaveChangesAsync(ct);
         }
 
-        var linkExists = await _db.UserAssignments
-            .AnyAsync(ua => ua.UserLogin == login && ua.AssignmentId == assignment.Id, ct);
-
-        if (linkExists)
-            return (new { conflict = true, msg = "This assignment is already linked to the current user." }, 409);
-
+        // Создаем связь с пользователем
         _db.UserAssignments.Add(new UserAssignment
         {
             UserLogin = login,
@@ -186,14 +355,17 @@ public class AssignmentsService : IAssignmentsService
         });
         await _db.SaveChangesAsync(ct);
 
-        var question = dir == Direction.EnToRu ? term.En : term.Ru;
+        var term = await _db.Terms.FindAsync([termId], ct);
+        var question = direction == Direction.EnToRu ? term!.En : term!.Ru;
 
         return (new
         {
+            success = true,
             assignmentId = assignment.Id,
-            termId = term.Id,
-            direction = dir.ToString(),
-            question
+            termId = term!.Id,
+            direction = direction.ToString(),
+            question,
+            term = new { term.En, term.Ru }
         }, 201);
     }
 
@@ -261,11 +433,14 @@ public class AssignmentsService : IAssignmentsService
         var a = await _db.Assignments.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (a is null) return null;
 
-        var ua = await _db.UserAssignments.FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == a.Id, ct);
-        if (ua is null) return new { forbid = true };
+        var ua = await _db.UserAssignments.FirstOrDefaultAsync(
+            x => x.UserLogin == login && x.AssignmentId == a.Id, ct);
 
+        if (ua is null)
+            return new { forbid = true };
         ua.IsSolved = false;
         ua.SolvedAt = null;
+        ua.ViewedAnswer = false; 
 
         var reset = dto ?? new ResetAssignmentDto();
         if (reset.ResetAttempts) ua.Attempts = 0;
@@ -280,7 +455,51 @@ public class AssignmentsService : IAssignmentsService
             isSolved = ua.IsSolved,
             attempts = ua.Attempts,
             solvedAt = ua.SolvedAt,
-            lastAnsweredAt = ua.LastAnsweredAt
+            lastAnsweredAt = ua.LastAnsweredAt,
+            viewedAnswer = ua.ViewedAnswer 
         };
     }
+
+
+
+    public async Task<List<SolvedAssignmentDto>> GetSolvedAsync(string login, CancellationToken ct)
+    {
+        var qBase = _db.UserAssignments
+            .Where(x => x.UserLogin == login && x.IsSolved)
+            .Include(x => x.Assignment)!
+                .ThenInclude(a => a.Term);
+
+        return await qBase
+            .OrderByDescending(x => x.LastAnsweredAt ?? x.SolvedAt ?? DateTime.MinValue)
+            .Select(x => new SolvedAssignmentDto
+            {
+                AssignmentId = x.AssignmentId,
+                TermId = x.Assignment!.TermId,
+
+                Direction = x.Assignment.Direction.ToString(), 
+      
+                Question = x.Assignment.Direction == Direction.EnToRu
+                    ? x.Assignment.Term!.En
+                    : x.Assignment.Term!.Ru,
+
+                Expected = x.Assignment.Term!.Translate(x.Assignment.Direction), 
+
+                Attempts = x.Attempts
+            })
+            .ToListAsync(ct);
+    }
+
+    public async Task<bool> PeekAnswerAsync(int assignmentId, string login, CancellationToken ct)
+    {
+        var ua = await _db.UserAssignments
+            .FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == assignmentId, ct);
+
+        if (ua == null) return false;
+
+        ua.ViewedAnswer = true;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+
 }

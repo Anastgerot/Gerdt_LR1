@@ -3,15 +3,31 @@
 namespace Gerdt_LR1.Services;
 
 public record AnswerDto(string? Answer);
-public record AssignForMeDto(int TermId, Direction? Direction);
+public class AssignForMeDto
+{
+    public Direction? Direction { get; set; }
+    public string? SearchTerm { get; set; }
+    public int? SelectedTermId { get; set; }
+}
+
 public record GenerateAssignmentsDto(int Count, Direction Direction);
 public record AddAssignmentsDto(int Count, string UserLogin);
 public record ResetAssignmentDto(bool ResetAttempts = true, bool ClearTimestamps = true);
 
+public class SolvedAssignmentDto
+{
+    public int AssignmentId { get; set; }
+    public int TermId { get; set; }
+    public string Question { get; set; } = "";
+    public int Attempts { get; set; }
+
+    public string Direction { get; set; } = "";  
+    public string? Expected { get; set; }         
+}
 
 public interface IAssignmentsService
 {
-    Task<IReadOnlyList<Assignment>> GetAllAsync(CancellationToken ct);
+    Task<IReadOnlyList<object>> GetAllAsync(CancellationToken ct);
     Task<Assignment?> GetByIdAsync(int id, CancellationToken ct);
 
     Task<IReadOnlyList<object>> GetUserAssignmentsAsync(string login, bool? solved, CancellationToken ct);
@@ -30,4 +46,9 @@ public interface IAssignmentsService
     Task<(IEnumerable<object> items, int createdLinks)> AddAssignmentsToUserAsync(AddAssignmentsDto dto, CancellationToken ct);
 
     Task<object?> MarkUnsolvedAsync(int id, string login, ResetAssignmentDto? dto, CancellationToken ct);
-}
+
+    Task<List<SolvedAssignmentDto>> GetSolvedAsync(string login, CancellationToken ct);
+
+    Task<bool> PeekAnswerAsync(int assignmentId, string login, CancellationToken ct);
+
+    }

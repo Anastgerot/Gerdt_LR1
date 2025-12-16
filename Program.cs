@@ -59,6 +59,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 
+builder.Services.AddCors(o => o.AddPolicy("frontend", p => p
+    .AllowAnyHeader()
+    .AllowAnyMethod()
+    .WithOrigins("http://localhost:5173"))); 
+
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -70,6 +76,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+app.UseCors("frontend");
 app.UseAuthentication();
 app.UseAuthorization();
 

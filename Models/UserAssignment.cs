@@ -20,5 +20,7 @@ namespace Gerdt_LR1.Models
 
         public int Attempts { get; set; } = 0;            
         public DateTime? LastAnsweredAt { get; set; }
+        public bool ViewedAnswer { get; set; } = false;
+
     }
 }

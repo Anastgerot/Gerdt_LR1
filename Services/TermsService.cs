@@ -63,54 +63,112 @@ public class TermsService : ITermsService
         var text = (dto.Text ?? "").Trim();
         var textLower = text.ToLowerInvariant();
 
-        var term = await _db.Terms.FirstOrDefaultAsync(
-            t => t.En.ToLower() == textLower || t.Ru.ToLower() == textLower, ct);
+        // Находим ВСЕ термины, которые содержат этот текст как английский или русский вариант
+        var terms = await _db.Terms
+            .Where(t => t.En.ToLower() == textLower || t.Ru.ToLower() == textLower)
+            .ToListAsync(ct);
 
-        if (term is null) return null;
+        if (!terms.Any()) return null;
 
         var direction = dto.Direction ?? (HasCyrillic(text) ? Direction.RuToEn : Direction.EnToRu);
 
-        var question = direction == Direction.EnToRu ? term.En : term.Ru;
-        var translation = direction == Direction.EnToRu ? term.Ru : term.En;
+        // Создаем списки всех возможных вопросов и переводов
+        var translations = new List<object>();
 
-        // 1) история просмотров пользователя
-        var link = await _db.UserTerms.FirstOrDefaultAsync(x => x.UserLogin == login && x.TermId == term.Id, ct);
-        if (link is null)
+        foreach (var term in terms)
         {
-            _db.UserTerms.Add(new UserTerm { UserLogin = login, TermId = term.Id, LastViewedAt = DateTime.UtcNow });
-        }
-        else
-        {
-            link.LastViewedAt = DateTime.UtcNow;
-        }
+            var question = direction == Direction.EnToRu ? term.En : term.Ru;
+            var translation = direction == Direction.EnToRu ? term.Ru : term.En;
 
-        // 2) карточка
-        var assignment = await _db.Assignments.FirstOrDefaultAsync(a => a.TermId == term.Id && a.Direction == direction, ct);
-        if (assignment is null)
-        {
-            assignment = new Assignment { TermId = term.Id, Direction = direction };
-            _db.Assignments.Add(assignment);
-            await _db.SaveChangesAsync(ct);
-        }
+            // 1) история просмотров пользователя для каждого термина
+            var link = await _db.UserTerms.FirstOrDefaultAsync(x => x.UserLogin == login && x.TermId == term.Id, ct);
+            if (link is null)
+            {
+                _db.UserTerms.Add(new UserTerm { UserLogin = login, TermId = term.Id, LastViewedAt = DateTime.UtcNow });
+            }
+            else
+            {
+                link.LastViewedAt = DateTime.UtcNow;
+            }
 
-        // 3) связь пользователь-карточка
-        var uaExists = await _db.UserAssignments.AnyAsync(ua => ua.UserLogin == login && ua.AssignmentId == assignment.Id, ct);
-        if (!uaExists)
-        {
-            _db.UserAssignments.Add(new UserAssignment { UserLogin = login, AssignmentId = assignment.Id, IsSolved = false });
+            // 2) карточка для каждого термина
+            var assignment = await _db.Assignments.FirstOrDefaultAsync(a => a.TermId == term.Id && a.Direction == direction, ct);
+            if (assignment is null)
+            {
+                assignment = new Assignment { TermId = term.Id, Direction = direction };
+                _db.Assignments.Add(assignment);
+                await _db.SaveChangesAsync(ct);
+            }
+
+            // 3) связь пользователь-карточка
+            var uaExists = await _db.UserAssignments.AnyAsync(ua => ua.UserLogin == login && ua.AssignmentId == assignment.Id, ct);
+            if (!uaExists)
+            {
+                _db.UserAssignments.Add(new UserAssignment { UserLogin = login, AssignmentId = assignment.Id, IsSolved = false });
+            }
+
+            translations.Add(new
+            {
+                termId = term.Id,
+                assignmentId = assignment.Id,
+                direction = direction.ToString(),
+                question,
+                translation,
+                allTranslations = GetOppositeTranslations(terms, direction, textLower)
+            });
         }
 
         await _db.SaveChangesAsync(ct);
 
+        // Если нашли только один термин, возвращаем его
+        if (translations.Count == 1)
+        {
+            return translations[0];
+        }
+
+        // Если нашли несколько терминов, возвращаем все
         return new
         {
-            termId = term.Id,
-            assignmentId = assignment.Id,
+            multipleTranslations = true,
+            count = translations.Count,
+            translations,
+            // Для обратной совместимости - первый перевод
+            termId = terms[0].Id,
             direction = direction.ToString(),
-            question,
-            translation
+            question = direction == Direction.EnToRu ? terms[0].En : terms[0].Ru,
+            translation = direction == Direction.EnToRu ? terms[0].Ru : terms[0].En,
+            allTranslations = GetOppositeTranslations(terms, direction, textLower)
         };
     }
+
+    // Вспомогательный метод для получения всех переводов в противоположном направлении
+    private List<string> GetOppositeTranslations(List<Term> terms, Direction direction, string originalTextLower)
+    {
+        var translations = new List<string>();
+
+        foreach (var term in terms)
+        {
+            if (direction == Direction.EnToRu)
+            {
+                // Если исходный текст на английском, собираем все русские переводы
+                if (term.En.ToLower() == originalTextLower && !string.IsNullOrWhiteSpace(term.Ru))
+                {
+                    translations.Add(term.Ru);
+                }
+            }
+            else
+            {
+                // Если исходный текст на русском, собираем все английские переводы
+                if (term.Ru.ToLower() == originalTextLower && !string.IsNullOrWhiteSpace(term.En))
+                {
+                    translations.Add(term.En);
+                }
+            }
+        }
+
+        return translations.Distinct().ToList();
+    }
+
 
     public async Task<IReadOnlyList<object>> GetMyTermsAsync(string login, CancellationToken ct)
     {

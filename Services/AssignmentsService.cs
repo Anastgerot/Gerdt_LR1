@@ -61,21 +61,46 @@ public class AssignmentsService : IAssignmentsService
 
     public async Task<object?> GetQuestionOrCheckAnswerAsync(int id, string login, AnswerDto? dto, CancellationToken ct)
     {
-        var a = await _db.Assignments.Include(x => x.Term).FirstOrDefaultAsync(x => x.Id == id, ct);
+        var a = await _db.Assignments
+            .Include(x => x.Term)
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
+
         if (a is null) return null;
 
-        var ua = await _db.UserAssignments.FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == a.Id, ct);
+        var ua = await _db.UserAssignments
+            .FirstOrDefaultAsync(x => x.UserLogin == login && x.AssignmentId == a.Id, ct);
+
         if (ua is null) return new { forbid = true };
 
-        // Получаем все термины с тем же английским словом
-        var allTermsWithSameEn = await _db.Terms
-            .Where(t => t.En.ToLower() == a.Term!.En.ToLower())
-            .ToListAsync(ct);
+        var term = a.Term!;
+        var question = a.Direction == Direction.EnToRu ? term.En : term.Ru;
 
-        var question = a.Direction == Direction.EnToRu ? a.Term!.En : a.Term!.Ru;
+        // Подбираем набор "альтернатив" в зависимости от направления
+        List<Term> relatedTerms;
 
+        if (a.Direction == Direction.EnToRu)
+        {
+            var key = (term.En ?? "").Trim().ToLower();
+            relatedTerms = await _db.Terms
+                .Where(t => (t.En ?? "").Trim().ToLower() == key)
+                .ToListAsync(ct);
+        }
+        else // RuToEn
+        {
+            var key = (term.Ru ?? "").Trim().ToLower();
+            relatedTerms = await _db.Terms
+                .Where(t => (t.Ru ?? "").Trim().ToLower() == key)
+                .ToListAsync(ct);
+        }
+
+        // Отдаём варианты при запросе вопроса
         if (dto is null || string.IsNullOrWhiteSpace(dto.Answer))
         {
+            var allPossibleTranslations =
+                a.Direction == Direction.EnToRu
+                    ? relatedTerms.Select(t => t.Ru).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList()
+                    : relatedTerms.Select(t => t.En).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
+
             return new
             {
                 assignmentId = a.Id,
@@ -86,9 +111,7 @@ public class AssignmentsService : IAssignmentsService
                 expected = (string?)null,
                 correct = (bool?)null,
                 isSolved = ua.IsSolved,
-                allPossibleTranslations = a.Direction == Direction.EnToRu
-                    ? allTermsWithSameEn.Select(t => t.Ru).Distinct().ToList()
-                    : null
+                allPossibleTranslations
             };
         }
 
@@ -97,38 +120,56 @@ public class AssignmentsService : IAssignmentsService
 
         var wasSolved = ua.IsSolved;
 
-        // Проверяем ответ по всем возможным переводам
+        // Проверка ответа по всем возможным вариантам
         bool correct = false;
         Term? matchedTerm = null;
 
+        var normalizedAnswer = dto.Answer.Trim().ToLower();
+
         if (a.Direction == Direction.EnToRu)
         {
-            // Для направления EN->RU проверяем все возможные русские переводы
-            var normalizedAnswer = dto.Answer.Trim().ToLower();
-
-            foreach (var term in allTermsWithSameEn)
+            // EN -> RU: сверяем с Ru
+            foreach (var t in relatedTerms)
             {
-                var normalizedRu = term.Ru.Trim().ToLower();
-                if (normalizedRu == normalizedAnswer ||
-                    normalizedRu.Split(',').Select(x => x.Trim()).Contains(normalizedAnswer))
+                var ru = (t.Ru ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(ru)) continue;
+
+                var ruLower = ru.ToLower();
+                if (ruLower == normalizedAnswer ||
+                    ruLower.Split(',').Select(x => x.Trim()).Contains(normalizedAnswer))
                 {
                     correct = true;
-                    matchedTerm = term;
+                    matchedTerm = t;
                     break;
                 }
             }
         }
         else
         {
-            correct = a.CheckAnswer(dto.Answer);
-            matchedTerm = a.Term;
+            // RU -> EN: сверяем с En
+            foreach (var t in relatedTerms)
+            {
+                var en = (t.En ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(en)) continue;
+
+                var enLower = en.ToLower();
+                if (enLower == normalizedAnswer ||
+                    enLower.Split(',').Select(x => x.Trim()).Contains(normalizedAnswer))
+                {
+                    correct = true;
+                    matchedTerm = t;
+                    break;
+                }
+            }
         }
 
+        // Зачет и "перекредитование" на другую карточку (в обе стороны)
         if (correct)
         {
             if (matchedTerm != null && matchedTerm.Id != a.TermId)
             {
-                ua.IsSolved = false; 
+                // текущую не засчитываем (как у тебя было)
+                ua.IsSolved = false;
 
                 var correctAssignment = await _db.Assignments
                     .FirstOrDefaultAsync(x => x.TermId == matchedTerm.Id && x.Direction == a.Direction, ct);
@@ -155,7 +196,7 @@ public class AssignmentsService : IAssignmentsService
             }
             else
             {
-                // Ответ для текущей карточки
+                // ответ для текущей карточки
                 if (!wasSolved)
                 {
                     ua.IsSolved = true;
@@ -172,6 +213,15 @@ public class AssignmentsService : IAssignmentsService
 
         await _db.SaveChangesAsync(ct);
 
+        // что показываем как expected
+        var expected = a.Direction == Direction.EnToRu ? term.Ru : term.En;
+
+        // все варианты (для UI)
+        var allTranslations =
+            a.Direction == Direction.EnToRu
+                ? relatedTerms.Select(t => t.Ru).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList()
+                : relatedTerms.Select(t => t.En).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
+
         return new
         {
             assignmentId = a.Id,
@@ -179,18 +229,14 @@ public class AssignmentsService : IAssignmentsService
             direction = a.Direction.ToString(),
             question,
             yourAnswer = dto.Answer,
-            // Показываем ожидаемый перевод для текущей карточки
-            expected = a.Term!.Translate(a.Direction),
-            // А также все возможные переводы
-            allTranslations = a.Direction == Direction.EnToRu
-                ? allTermsWithSameEn.Select(t => t.Ru).Distinct().ToList()
-                : new List<string> { a.Term.En },
+            expected,
+            allTranslations,
             correct,
             isSolved = ua.IsSolved,
-            // Флаг, показывающий, что ответ был зачтен за другую карточку
             creditedToOtherCard = correct && matchedTerm != null && matchedTerm.Id != a.TermId
         };
     }
+
     public async Task<bool> IsLinkedAsync(int assignmentId, string login, CancellationToken ct)
     {
         return await _db.UserAssignments

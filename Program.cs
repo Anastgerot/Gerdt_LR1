@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Telegram.Bot;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,6 +32,18 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<IAssignmentsService, AssignmentsService>();
 builder.Services.AddScoped<ITermsService, TermsService>();
 builder.Services.AddScoped<IAccountService, AccountService>();
+
+// Telegram bot
+builder.Services.AddSingleton<ITelegramBotClient>(sp =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var token = cfg["Telegram:BotToken"] ?? throw new Exception("Telegram:BotToken missing");
+    return new TelegramBotClient(token);
+});
+
+builder.Services.AddSingleton<TelegramUpdateHandler>();
+builder.Services.AddHostedService<TelegramBotHostedService>();
+
 
 
 builder.Services.AddAuthorization();

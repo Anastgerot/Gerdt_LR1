@@ -11,8 +11,9 @@ namespace Gerdt_LR1.Data
         public DbSet<Assignment> Assignments => Set<Assignment>();
         public DbSet<UserTerm> UserTerms => Set<UserTerm>();
         public DbSet<UserAssignment> UserAssignments => Set<UserAssignment>();
-
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+        public DbSet<TelegramUserLink> TelegramUserLinks => Set<TelegramUserLink>();
+        public DbSet<TelegramAuthState> TelegramAuthStates => Set<TelegramAuthState>();
 
         protected override void OnModelCreating(ModelBuilder b)
         {
@@ -94,6 +95,46 @@ namespace Gerdt_LR1.Data
                     .HasForeignKey(x => x.TermId)
                     .OnDelete(DeleteBehavior.Cascade);
             });
+
+
+            // TelegramUserLink
+            b.Entity<TelegramUserLink>(e =>
+            {
+                e.HasKey(x => x.TelegramUserId);
+
+                e.Property(x => x.TelegramUserId).ValueGeneratedNever();
+
+                e.Property(x => x.UserLogin)
+                    .HasMaxLength(64)
+                    .IsRequired();
+
+                e.HasOne<User>()
+                    .WithMany()
+                    .HasForeignKey(x => x.UserLogin)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                e.HasIndex(x => x.UserLogin);
+            });
+
+            // TelegramAuthState
+            b.Entity<TelegramAuthState>(e =>
+            {
+                e.HasKey(x => x.TelegramUserId);
+
+                e.Property(x => x.TelegramUserId).ValueGeneratedNever();
+
+                e.Property(x => x.Step)
+                    .HasMaxLength(32)
+                    .IsRequired();
+
+                e.Property(x => x.TempLogin)
+                    .HasMaxLength(64);
+
+                e.HasIndex(x => x.UpdatedAtUtc);
+            });
+
+
+
 
         }
     }
